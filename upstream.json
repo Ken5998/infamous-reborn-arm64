@@ -1,0 +1,30 @@
+{
+  "infamous": {
+    "repo": "https://github.com/whompay/inFAMOUSreborn.git",
+    "commit": "d87a35dd90ae95176e2532ee2d43b2e33fb7276e",
+    "title_id": "BCES00220"
+  },
+  "llvm_mingw": {
+    "version": "20251202",
+    "aarch64": {
+      "url": "https://github.com/mstorsjo/llvm-mingw/releases/download/20251202/llvm-mingw-20251202-ucrt-ubuntu-22.04-aarch64.tar.xz",
+      "sha256": "0cf81f10a9058902c451d4941b7f739408cbbfbbf8bc0ebb82ddf1ae08ece6c6"
+    },
+    "x86_64": {
+      "url": "https://github.com/mstorsjo/llvm-mingw/releases/download/20251202/llvm-mingw-20251202-ucrt-ubuntu-22.04-x86_64.tar.xz",
+      "sha256": "471d5301c67afda04cc7528bcae1d3142fd797ff9dd611a27c655a1082a55666"
+    }
+  },
+  "sse2neon": {
+    "url": "https://raw.githubusercontent.com/DLTcollab/sse2neon/2272251cc3ad9cba8b8c47c4065811cfb396b802/sse2neon.h",
+    "sha256": "932e41317cc325846256695d2aa83812ff6b6d065c8994b73a461efaf1f10bc3"
+  },
+  "sdl3": {
+    "url": "https://github.com/libsdl-org/SDL/releases/download/release-3.4.18/SDL3-devel-3.4.18-VC.zip",
+    "sha256": "78d84602ae616cfe26b33a73b7d3b9b6b56e8a6650e53d92c9c6ca938f747acd",
+    "dll": "SDL3-3.4.18/lib/arm64/SDL3.dll"
+  },
+  "rpcs3": {
+    "api": "https://update.rpcs3.net/?api=v3&os_type=linux&os_arch=arm64&c=0000000"
+  }
+}

@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    name: Windows ARM64 build (smoke title)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build cmake python3
+      - name: llvm-mingw cache
+        uses: actions/cache@v4
+        with:
+          path: work/toolchain
+          key: toolchain-x86_64-${{ hashFiles('upstream.json', 'compat/x86/*') }}
+      - name: Toolchain
+        run: scripts/fetch-toolchain.sh work/toolchain
+      - name: inFAMOUS Reborn + patches
+        run: scripts/prepare.sh work
+      - name: Build and link against the smoke title
+        run: scripts/ci-smoke.sh work/inFAMOUSreborn work/toolchain
+      - name: Device probe
+        run: |
+          m=work/toolchain/llvm-mingw/bin
+          mkdir -p work/probe
+          $m/aarch64-w64-mingw32-clang -O2 -fms-extensions -Wall -Werror tools/probe/probe.c -o work/probe/infamous-probe.exe \
+            -static -ld3d12 -ldxgi -ld3dcompiler_47 -luser32 -lgdi32 -ldxguid
+          $m/arm64ec-w64-mingw32-clang -O2 -fms-extensions -Wall -Werror tools/probe/probe.c -o work/probe/infamous-probe-arm64ec.exe \
+            -static -ld3d12 -ldxgi -ld3dcompiler_47 -luser32 -lgdi32 -ldxguid
+          cp tools/probe/probe.sh work/probe/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: infamous-probe
+          path: work/probe/
+
+  installer:
+    name: inFAMOUS Reborn installer (linux-arm64)
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - name: Upstream at the pinned commit
+        run: scripts/prepare.sh work
+      - name: Build the command-line installer
+        run: |
+          cd work/inFAMOUSreborn/installer
+          cargo build --release --locked --no-default-features --bin infamous-installer
+          ./target/release/infamous-installer --help | head -3
+          file target/release/infamous-installer

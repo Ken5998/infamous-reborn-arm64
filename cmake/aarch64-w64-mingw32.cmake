@@ -1,0 +1,15 @@
+# CMake toolchain for the Windows ARM64 build with llvm-mingw.
+# IF_TOOLCHAIN (environment or -D) is the folder scripts/fetch-toolchain.sh filled.
+if(NOT IF_TOOLCHAIN)
+    set(IF_TOOLCHAIN "$ENV{IF_TOOLCHAIN}")
+endif()
+set(CMAKE_SYSTEM_NAME Windows)
+set(CMAKE_SYSTEM_PROCESSOR ARM64)
+set(_m "${IF_TOOLCHAIN}/llvm-mingw")
+set(CMAKE_C_COMPILER "${_m}/bin/aarch64-w64-mingw32-clang")
+set(CMAKE_CXX_COMPILER "${_m}/bin/aarch64-w64-mingw32-clang++")
+set(CMAKE_RC_COMPILER "${_m}/bin/aarch64-w64-mingw32-windres")
+set(CMAKE_FIND_ROOT_PATH "${_m}/aarch64-w64-mingw32")
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
