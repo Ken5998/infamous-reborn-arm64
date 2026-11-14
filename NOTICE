@@ -1,0 +1,26 @@
+infamous-reborn-arm64
+https://github.com/Ken5998/infamous-reborn-arm64
+
+Copyright (c) 2026 Kenan Kasumović
+
+The scripts, the launcher and the build files here are licensed under the
+MIT License (see LICENSE).
+
+This repository builds inFAMOUS Reborn, the static recompilation of the
+PlayStation 3 version of inFamous by whompay, for ARM64 handhelds:
+https://github.com/whompay/inFAMOUSreborn
+inFAMOUS Reborn publishes no licence for its game-specific code; it is not
+stored here. The scripts download it from its own repository at build time,
+at a pinned commit, and the patches here change it on your machine. Nothing
+built from it is published here: you build the game yourself from your own
+copy.
+
+ps3recomp: https://github.com/sp00nznet/ps3recomp
+Copyright (c) 2026 Ned Heller / sp00nznet and contributors, MIT License.
+inFAMOUS Reborn carries its own copy; the patches here change it at build
+time.
+
+inFamous is a trademark of Sony Interactive Entertainment. This project is
+not affiliated with Sony Interactive Entertainment or Sucker Punch
+Productions. No game files are included: you need your own PlayStation 3
+copy of inFamous (European release, BCES00220).
