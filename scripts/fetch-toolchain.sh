@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Downloads the Windows ARM64 toolchain into DIR (default ./toolchain): llvm-mingw for this
-# machine, sse2neon next to this repository's x86 compat headers, and the case-fixed import
-# library names the runtime's #pragma comment(lib) lines ask for. Versions and hashes are in
-# upstream.json.
+# machine, sse2neon next to this repository's x86 compat headers, the case-fixed import library
+# names the runtime's #pragma comment(lib) lines ask for and, on aarch64, CMake and Ninja
+# (ArmadaOS has neither) in DIR/bin. Versions and hashes are in upstream.json. Needs only curl,
+# tar, xz and python3, so it also runs on ArmadaOS.
 #
 #   scripts/fetch-toolchain.sh [DIR]
 set -euo pipefail
@@ -42,4 +43,22 @@ mkdir -p "$lib"
 for n in Synchronization; do
     ln -sfn "$tc/llvm-mingw/aarch64-w64-mingw32/lib/lib$(echo "$n" | tr '[:upper:]' '[:lower:]').a" "$lib/lib$n.a"
 done
+if [ "$host" = aarch64 ]; then
+    mkdir -p "$tc/bin"
+    if [ "$(cat "$tc/cmake/.version" 2>/dev/null)" != "$(field cmake version)" ]; then
+        fetch "$(field cmake aarch64 url)" "$(field cmake aarch64 sha256)" "$tc/downloads/cmake.tar.gz"
+        rm -rf "$tc/cmake" && mkdir -p "$tc/cmake"
+        tar -xzf "$tc/downloads/cmake.tar.gz" -C "$tc/cmake" --strip-components=1
+        field cmake version > "$tc/cmake/.version"
+        rm -f "$tc/downloads/cmake.tar.gz"
+    fi
+    if [ "$(cat "$tc/ninja.version" 2>/dev/null)" != "$(field ninja version)" ]; then
+        fetch "$(field ninja aarch64 url)" "$(field ninja aarch64 sha256)" "$tc/downloads/ninja.zip"
+        python3 -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1]).extract("ninja", sys.argv[2])' "$tc/downloads/ninja.zip" "$tc/bin"
+        chmod +x "$tc/bin/ninja"
+        field ninja version > "$tc/ninja.version"
+        rm -f "$tc/downloads/ninja.zip"
+    fi
+    for t in cmake ctest; do ln -sfn "../cmake/bin/$t" "$tc/bin/$t"; done
+fi
 echo "Toolchain ready in $tc"

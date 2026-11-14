@@ -26,5 +26,19 @@
   },
   "rpcs3": {
     "api": "https://update.rpcs3.net/?api=v3&os_type=linux&os_arch=arm64&c=0000000"
+  },
+  "cmake": {
+    "version": "3.31.10",
+    "aarch64": {
+      "url": "https://github.com/Kitware/CMake/releases/download/v3.31.10/cmake-3.31.10-linux-aarch64.tar.gz",
+      "sha256": "a343c6294f770742904e6a6792e0956b5ff8212abfb63cac99237de2e210fa0f"
+    }
+  },
+  "ninja": {
+    "version": "1.13.2",
+    "aarch64": {
+      "url": "https://github.com/ninja-build/ninja/releases/download/v1.13.2/ninja-linux-aarch64.zip",
+      "sha256": "fd2cacc8050a7f12a16a2e48f9e06fca5c14fc4c2bee2babb67b58be17a607fc"
+    }
   }
 }

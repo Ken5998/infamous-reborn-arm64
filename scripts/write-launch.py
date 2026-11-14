@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+"""Writes DIST/infamous.sh, the script Steam starts: it sets inFAMOUS Reborn's launch settings
+(installer/infamous.toml [launch] env, then config/rp6.env), finds Steam's ARM64 Proton and runs
+inFamousRecomp.exe with it in its own prefix (DIST/prefix).
+
+    scripts/write-launch.py SRC DIST GAME
+
+SRC is the prepared checkout, DIST the install folder, GAME the game folder (with PS3_GAME).
+"""
+import shlex
+import sys
+import tomllib
+from pathlib import Path
+
+repo = Path(__file__).resolve().parent.parent
+
+
+def winpath(p: Path) -> str:
+    return "Z:" + str(p).replace("/", "\\")
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) != 4:
+        print(__doc__, file=sys.stderr)
+        return 2
+    src, dist, game = (Path(a).resolve() for a in argv[1:])
+    manifest = tomllib.loads((src / "installer" / "infamous.toml").read_text(encoding="utf-8"))
+    launch = manifest["launch"]
+    env = dict(launch.get("env", {}))
+    for line in (repo / "config" / "rp6.env").read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            env[k.strip()] = v.strip()
+    port = src / manifest["layout"]["port"]
+    exe = port / "build-arm64" / "inFamousRecomp.exe"
+    elf = game / "PS3_GAME" / "USRDIR" / "EBOOT.elf"
+    q = shlex.quote
+    lines = [
+        "#!/usr/bin/env bash",
+        "# Starts inFAMOUS Reborn with Steam's ARM64 Proton. Written by scripts/write-launch.py: rebuilding",
+        "# replaces it. Your own settings go in the game's pause menu > Settings, or in infamous.env here",
+        "# (KEY=VALUE lines, read last).",
+        f"dist={q(str(dist))}",
+        f"port={q(str(port))}",
+        f"exe={q(str(exe))}",
+        f"elf={q(winpath(elf))}",
+        "",
+        "find_proton() {  # IF_PROTON wins; else the newest Proton with ARM64 Windows libraries",
+        '    if [ -n "${IF_PROTON:-}" ]; then echo "$IF_PROTON"; return; fi',
+        "    local p best=",
+        '    for p in "$HOME"/.local/share/Steam/steamapps/common/Proton* "$HOME"/.steam/steam/steamapps/common/Proton* \\',
+        '             "$HOME"/.local/share/Steam/compatibilitytools.d/* "$HOME"/.steam/steam/compatibilitytools.d/*; do',
+        '        [ -x "$p/proton" ] && [ -d "$p/files/lib/wine/aarch64-windows" ] || continue',
+        '        case "$p" in *Experimental*) echo "$p"; return ;; esac',
+        '        [ -z "$best" ] || [[ "$p" > "$best" ]] && best=$p',
+        "    done",
+        '    echo "$best"',
+        "}",
+        "proton=$(find_proton)",
+        '[ -n "$proton" ] || { echo "No ARM64 Proton found: install Proton from Steam (or set IF_PROTON)" >&2; exit 1; }',
+        "",
+    ]
+    lines += [f"export {k}={q(str(v))}" for k, v in env.items()]
+    lines += [
+        '[ -f "$dist/infamous.env" ] && set -a && . "$dist/infamous.env" && set +a',
+        "",
+        'export STEAM_COMPAT_DATA_PATH="$dist/prefix"',
+        'mkdir -p "$STEAM_COMPAT_DATA_PATH"',
+        'if [ -z "${STEAM_COMPAT_CLIENT_INSTALL_PATH:-}" ]; then',
+        '    for s in "$HOME/.local/share/Steam" "$HOME/.steam/steam"; do',
+        '        [ -d "$s/steamapps" ] && { export STEAM_COMPAT_CLIENT_INSTALL_PATH="$s"; break; }',
+        "    done",
+        "fi",
+        'cd "$port" || exit 1',
+        'echo "inFAMOUS Reborn with $(basename "$proton")" >&2',
+        f'exec "$proton" waitforexitandrun "$exe" "$elf" > {q(launch.get("stdout", "play.out.log"))} 2> {q(launch.get("stderr", "play.err.log"))}',
+        "",
+    ]
+    out = dist / "infamous.sh"
+    out.write_text("\n".join(lines), encoding="utf-8")
+    out.chmod(0o755)
+    print(f"Wrote {out} ({len(env)} launch settings)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
