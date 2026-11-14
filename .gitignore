@@ -1,0 +1,5 @@
+work/
+*.exe
+*.zip
+tools/probe/*.log
+tools/probe/infamous-probe-report.txt

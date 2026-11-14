@@ -1,0 +1,200 @@
+From 75be823891ae5bd4824af251fab8c5cd0046cb6f Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
+ <46025606+Ken5998@users.noreply.github.com>
+Date: Sat, 14 Nov 2026 20:13:46 +0000
+Subject: [PATCH] build: compile the runtime and the game for Windows ARM64
+
+Drop -msse4.1 from the runtime when the target is not x86, read the
+ARM64 CONTEXT (Pc/Sp/Fp/Lr) in the profiler and crash paths, skip the
+x86 CPU feature check and the EFlags single-step on ARM64, and take
+__rdtsc from the port's x86 compat header.
+---
+ infamous-recomp/main.cpp             |  6 ++++--
+ ps3recomp/CMakeLists.txt             |  8 +++++---
+ ps3recomp/include/ps3emu/hz_stats.h  |  6 +++---
+ ps3recomp/libs/spurs/cellSpurs.c     |  5 +++++
+ ps3recomp/runtime/ppu/ppu_hle.cpp    |  3 +++
+ ps3recomp/runtime/ppu/ppu_loader.cpp | 25 +++++++++++++++++++++++++
+ 6 files changed, 45 insertions(+), 8 deletions(-)
+
+diff --git a/infamous-recomp/main.cpp b/infamous-recomp/main.cpp
+index 3bbd86d..3e54600 100644
+--- a/infamous-recomp/main.cpp
++++ b/infamous-recomp/main.cpp
+@@ -774,7 +774,7 @@ static void start(void)
+ }
+ } /* namespace v241c_la */
+ #endif
+-#ifdef _WIN32
++#if defined(_WIN32) && !(defined(__aarch64__) || defined(_M_ARM64))   /* x86 CPU feature check (ARM64: nothing to check) */
+ /* ---------------------------------------------------------------------------
+  * v242B CPU feature check (runs as the process ENTRY POINT, before the C runtime and every static constructor --
+  * the runtime and the lifted code are built with AVX2/FMA/BMI2 and would die with an illegal instruction on an
+@@ -923,7 +923,9 @@ int main(int argc, char** argv)
+                   getenv("ANIM_LOD"), getenv("ADAPT_LOD"), getenv("ADAPT_LOD_MIN"));
+       } }
+ #ifdef _WIN32
+-    v241c_la::start();   /* v241C LOG_ASYNC=1 (default off; after settings.ini, which may set it) */
++    v241c_la::start();
++#endif
++#if defined(_WIN32) && !(defined(__aarch64__) || defined(_M_ARM64))   /* v241C LOG_ASYNC=1 (default off; after settings.ini, which may set it) */
+     if (v242b_aff) fprintf(stderr, "[CPU] v242B PS3_AFFINITY: process limited to mask 0x%llX (%d logical CPUs)\n",
+                            v242b_aff, (int)__builtin_popcountll(v242b_aff));
+     fprintf(stderr, "[CPU] v242B %s build, CPU feature level %d (2 = AVX2/FMA/BMI2, 1 = SSE4.1 only)\n",
+diff --git a/ps3recomp/CMakeLists.txt b/ps3recomp/CMakeLists.txt
+index a9ca334..0f473fc 100644
+--- a/ps3recomp/CMakeLists.txt
++++ b/ps3recomp/CMakeLists.txt
+@@ -318,10 +318,12 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
+         # and clang-cl with no /O flag compiles at /Od -- a "Release" runtime
+         # was unoptimised without a word. Duplicating a default -O2 is harmless.
+         $<$<CONFIG:Release,RelWithDebInfo>:-O2>
+-        # SSE4.1 (any x86-64 since ~2008): pshufb/blendv for spu_shufb, the
+-        # hottest SPU op in lifted audio code.
+-        -msse4.1
+     )
++    # SSE4.1 (any x86-64 since ~2008): pshufb/blendv for spu_shufb, the
++    # hottest SPU op in lifted audio code. x86 only: arm64 has NEON in the base ISA.
++    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i.86|x86)$")
++        target_compile_options(ps3recomp_runtime PRIVATE -msse4.1)
++    endif()
+ elseif(MSVC)
+     # Real cl.exe -- clang-cl reports its id as Clang and is handled above.
+     #
+diff --git a/ps3recomp/include/ps3emu/hz_stats.h b/ps3recomp/include/ps3emu/hz_stats.h
+index abc24a5..e37c29e 100644
+--- a/ps3recomp/include/ps3emu/hz_stats.h
++++ b/ps3recomp/include/ps3emu/hz_stats.h
+@@ -6,10 +6,10 @@
+ #ifndef PS3EMU_HZ_STATS_H
+ #define PS3EMU_HZ_STATS_H
+ #include <stdint.h>
+-#if defined(_MSC_VER) || defined(_WIN32)
++#if (defined(_MSC_VER) || defined(_WIN32)) && !(defined(__aarch64__) || defined(_M_ARM64))
+ #include <intrin.h>
+ #else
+-#include <x86intrin.h>
++#include <x86intrin.h>   /* ARM64: the port's x86 compat header (__rdtsc from the generic timer) */
+ #endif
+ #ifdef __cplusplus
+ extern "C" {
+@@ -29,7 +29,7 @@ enum {
+ extern volatile long long g_hz[32];
+ int ps3_hz_is_main(void);                    /* calling host thread == main guest thread */
+ static inline unsigned long long hz_tsc(void) { return __rdtsc(); }
+-#if defined(_MSC_VER) || defined(_WIN32)
++#if defined(_MSC_VER) || (defined(_WIN32) && !(defined(__aarch64__) || defined(_M_ARM64)))
+ static inline void hz_add(int i, long long v) { _InterlockedExchangeAdd64((volatile long long*)&g_hz[i], v); }
+ #else
+ static inline void hz_add(int i, long long v) { __atomic_fetch_add(&g_hz[i], v, __ATOMIC_RELAXED); }
+diff --git a/ps3recomp/libs/spurs/cellSpurs.c b/ps3recomp/libs/spurs/cellSpurs.c
+index edc2333..6cf2a04 100644
+--- a/ps3recomp/libs/spurs/cellSpurs.c
++++ b/ps3recomp/libs/spurs/cellSpurs.c
+@@ -3756,6 +3756,10 @@ static DWORD WINAPI w16p_thread(LPVOID unused)
+             uint32_t fr[64]; int n = 0; const int wid = s_w16p_wid;
+             if (SuspendThread(s_w16p_th) != (DWORD)-1) {
+                 if (GetThreadContext(s_w16p_th, &c)) {
++#if defined(__aarch64__) || defined(_M_ARM64)
++                    /* ARM64: no x64 unwind walk here; record the sampled PC only. */
++                    fr[n++] = (uint32_t)(c.Pc - base);
++#else
+                     for (; n < 64; n++) {
+                         fr[n] = (uint32_t)(c.Rip - base);
+                         DWORD64 ib = 0; PRUNTIME_FUNCTION rf = RtlLookupFunctionEntry(c.Rip, &ib, NULL);
+@@ -3764,6 +3768,7 @@ static DWORD WINAPI w16p_thread(LPVOID unused)
+                         RtlVirtualUnwind(0 /* UNW_FLAG_NHANDLER */, ib, c.Rip, rf, &c, &hd, &ef, NULL);
+                         if (!c.Rip) { n++; break; }
+                     }
++#endif
+                 }
+                 ResumeThread(s_w16p_th);
+             }
+diff --git a/ps3recomp/runtime/ppu/ppu_hle.cpp b/ps3recomp/runtime/ppu/ppu_hle.cpp
+index 1bdd9ba..8633dfd 100644
+--- a/ps3recomp/runtime/ppu/ppu_hle.cpp
++++ b/ps3recomp/runtime/ppu/ppu_hle.cpp
+@@ -30,6 +30,9 @@
+ #endif
+ #include <windows.h>   /* v213 HLESTAT: QueryPerformanceCounter */
+ #include <intrin.h>
++#if defined(__aarch64__) || defined(_M_ARM64)
++#include <x86intrin.h>   /* ARM64: the port's x86 compat header (__rdtsc) */
++#endif
+ #endif
+ #include <time.h>
+ #include <stdio.h>
+diff --git a/ps3recomp/runtime/ppu/ppu_loader.cpp b/ps3recomp/runtime/ppu/ppu_loader.cpp
+index b88129a..8b5770e 100644
+--- a/ps3recomp/runtime/ppu/ppu_loader.cpp
++++ b/ps3recomp/runtime/ppu/ppu_loader.cpp
+@@ -354,6 +354,13 @@ static void sc_trace(uint64_t num, ppu_context* ctx, uint64_t a3, uint64_t a4,
+ #include <windows.h>
+ #include <tlhelp32.h>
+ #include <dbghelp.h>
++#if defined(__aarch64__) || defined(_M_ARM64)
++/* ARM64: the profiler and crash paths below read the x64 CONTEXT names; the ARM64 CONTEXT has the same
++ * registers as Pc / Sp / Fp. */
++#define Rip Pc
++#define Rsp Sp
++#define Rbp Fp
++#endif
+ 
+ /* ---------------------------------------------------------------------------
+  * PS3_SAMPLE=<ms>: a sampling profiler over GUEST code.
+@@ -723,7 +730,11 @@ static void samp_unwind_wait(DWORD tid, const CONTEXT* c0, uintptr_t xb)
+         for (int fr = 0; fr < 24 && (got < 2 || !gdone); fr++) {
+             DWORD64 ib = 0;
+             PRUNTIME_FUNCTION rf = RtlLookupFunctionEntry(u.Rip, &ib, NULL);
++            #if defined(__aarch64__) || defined(_M_ARM64)
++            if (!rf) { u.Pc = u.Lr; }   /* leaf: the return address is in LR */
++#else
+             if (!rf) { u.Rip = *(const DWORD64*)u.Rsp; u.Rsp += 8; }
++#endif
+             else { PVOID hd = NULL; DWORD64 ef = 0;
+                    RtlVirtualUnwind(UNW_FLAG_NHANDLER, ib, u.Rip, rf, &u, &hd, &ef, NULL); }
+             if (!u.Rip) break;
+@@ -1324,7 +1335,9 @@ static LONG WINAPI ppu_guard_veh(EXCEPTION_POINTERS* ep)
+              * exactly who cleared it. */
+             s_guard_pre = __builtin_bswap32(*(volatile uint32_t*)(vm_base + s_guard_ea));
+             DWORD old; VirtualProtect((void*)s_guard_page, 0x1000, PAGE_READWRITE, &old);
++#if !(defined(__aarch64__) || defined(_M_ARM64))
+             ep->ContextRecord->EFlags |= 0x100;   /* single-step to re-arm after the write */
++#endif
+             return EXCEPTION_CONTINUE_EXECUTION;
+         }
+     }
+@@ -1351,7 +1364,9 @@ static LONG WINAPI ppu_guard_veh(EXCEPTION_POINTERS* ep)
+               }
+           } }
+         DWORD old; VirtualProtect((void*)s_guard_page, 0x1000, PAGE_READONLY, &old);
++#if !(defined(__aarch64__) || defined(_M_ARM64))
+         ep->ContextRecord->EFlags &= ~0x100u;
++#endif
+         return EXCEPTION_CONTINUE_EXECUTION;
+     }
+     return EXCEPTION_CONTINUE_SEARCH;
+@@ -4375,6 +4390,15 @@ static const RUNTIME_FUNCTION* prof_mod_lookup(uintptr_t pc, uintptr_t* ib, int*
+         *known = 1; *ib = m.lo;
+         const DWORD rva = (DWORD)(pc - m.lo);
+         DWORD a = 0, b = m.npd;
++#if defined(__aarch64__) || defined(_M_ARM64)
++        /* ARM64 .pdata entries carry no end address: take the last function starting at or before pc. */
++        while (a < b) {
++            const DWORD mid = (a + b) / 2;
++            if (rva < m.pd[mid].BeginAddress) b = mid;
++            else a = mid + 1;
++        }
++        return a ? &m.pd[a - 1] : NULL;
++#else
+         while (a < b) {
+             const DWORD mid = (a + b) / 2;
+             if (rva < m.pd[mid].BeginAddress) b = mid;
+@@ -4382,6 +4406,7 @@ static const RUNTIME_FUNCTION* prof_mod_lookup(uintptr_t pc, uintptr_t* ib, int*
+             else return &m.pd[mid];
+         }
+         return NULL;   /* leaf function */
++#endif
+     }
+     return NULL;
+ }
