@@ -48,10 +48,14 @@ for p in "${protons[@]}"; do
     for exe in infamous-probe.exe infamous-probe-arm64ec.exe; do
         [ -f "$here/$exe" ] || continue
         echo "== $exe with $(basename "$p")"
-        rm -f "$here/infamous-probe.log"
-        ( cd "$here" && STEAM_COMPAT_CLIENT_INSTALL_PATH="$client" STEAM_COMPAT_DATA_PATH="$pfx" \
-              PROTON_LOG=1 PROTON_LOG_DIR="$here" timeout 180 "$p/proton" run "$here/$exe" ) > "$here/run.out" 2>&1
-        echo "exit code $?"
+        for attempt in 1 2; do   # the first run in a new prefix can end while Proton sets the prefix up
+            rm -f "$here/infamous-probe.log"
+            ( cd "$here" && STEAM_COMPAT_CLIENT_INSTALL_PATH="$client" STEAM_COMPAT_DATA_PATH="$pfx" \
+                  PROTON_LOG=1 PROTON_LOG_DIR="$here" timeout 180 "$p/proton" run "$here/$exe" ) > "$here/run.out" 2>&1
+            rc=$?
+            [ -f "$here/infamous-probe.log" ] && break
+        done
+        echo "exit code $rc (attempt $attempt; 5 = access violation)"
         if [ -f "$here/infamous-probe.log" ]; then cat "$here/infamous-probe.log"
         else echo "(no infamous-probe.log: the exe did not start)"; tail -n 40 "$here/run.out"; fi
         log=$(ls -t "$here"/steam-*.log 2>/dev/null | head -1)

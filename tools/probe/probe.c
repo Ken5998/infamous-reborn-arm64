@@ -1,8 +1,8 @@
 /*
  * infamous-probe: checks, in a few seconds, that this device can run a Windows ARM64 build of
  * inFAMOUS Reborn under Proton: the process runs as native ARM64, the guest memory layout the
- * PS3 runtime reserves (4 GB windows, low 4 GB trap) is available, access violations reach a
- * __try handler and a vectored handler, and Direct3D 12 (device, feature level 11_0, flip-model
+ * PS3 runtime reserves (4 GB windows, low 4 GB trap) is available, a vectored handler can commit
+ * guest pages on access violations and resume, and Direct3D 12 (device, feature level 11_0, flip-model
  * swapchain, D24S8, BC1-3 textures, HLSL 5.0 compile through d3dcompiler_47) works.
  *
  * Writes infamous-probe.log next to the exe and shows a few colours in a window.
@@ -34,19 +34,33 @@ static void check(int ok, const char* what, const char* detail)
     if (!ok) g_fail++;
 }
 
-static LONG WINAPI veh(EXCEPTION_POINTERS* ep)
+/* The runtime's vm_commit_veh: guest memory is reserved, and a vectored handler commits the page an access
+ * violation lands in and resumes the faulting instruction. (Hardware faults never reach a __try block in
+ * this build: clang only scopes __try around calls, upstream notes the same for its clang-cl build.) */
+static uint8_t* g_win;
+static volatile LONG g_commits, g_search;
+static LONG WINAPI veh_search(EXCEPTION_POINTERS* ep)   /* first in the chain, like the guest-pointer trap */
 {
-    static volatile LONG seen;
-    if (ep->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && !seen) {
-        seen = 1;
-    }
+    if (ep->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) InterlockedIncrement(&g_search);
     return EXCEPTION_CONTINUE_SEARCH;
 }
-
-static int probe_av(volatile uint8_t* p)
+static LONG WINAPI veh_commit(EXCEPTION_POINTERS* ep)
 {
-    __try { return p[0]; }
-    __except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) { return -1; }
+    EXCEPTION_RECORD* er = ep->ExceptionRecord;
+    if (er->ExceptionCode != EXCEPTION_ACCESS_VIOLATION || er->NumberParameters < 2) return EXCEPTION_CONTINUE_SEARCH;
+    uintptr_t at = (uintptr_t)er->ExceptionInformation[1];
+    if (!g_win || at < (uintptr_t)g_win || at >= (uintptr_t)g_win + 0x100000000ull) return EXCEPTION_CONTINUE_SEARCH;
+    if (!VirtualAlloc((void*)(at & ~(uintptr_t)0xFFFF), 0x10000, MEM_COMMIT, PAGE_READWRITE)) return EXCEPTION_CONTINUE_SEARCH;
+    InterlockedIncrement(&g_commits);
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+static DWORD WINAPI veh_thread(void* arg)
+{
+    volatile uint32_t* p = (volatile uint32_t*)arg;
+    for (int i = 0; i < 64; i++) p[i * 0x4000] = 0xC0DE0000u + i;   /* 64 pages of 64 KB, written first */
+    uint32_t sum = 0;
+    for (int i = 0; i < 64; i++) sum += p[i * 0x4000] - 0xC0DE0000u;
+    return sum;
 }
 
 static void probe_cpu_mem(void)
@@ -84,9 +98,20 @@ static void probe_cpu_mem(void)
             uint8_t* m = (uint8_t*)VirtualAlloc(base + 0x10000000u, 0x10000000u, MEM_COMMIT, PAGE_READWRITE);
             if (m) { memset(m, 0x5A, 0x10000000u); }
             check(m != NULL && m[0x0FFFFFFF] == 0x5A, "commit and touch 256 MB of guest memory", NULL);
-            AddVectoredExceptionHandler(1, veh);
-            int r = probe_av(base + 0x80000000u);
-            check(r == -1, "access violation caught by __try/__except (vectored handler installed)", NULL);
+            g_win = base;
+            AddVectoredExceptionHandler(1, veh_commit);
+            AddVectoredExceptionHandler(1, veh_search);   /* runs first */
+            volatile uint32_t* r = (volatile uint32_t*)(base + 0x80000000u);
+            r[3] = 0x12345678u;                            /* faults, gets committed, resumes */
+            snprintf(b, sizeof b, "value %08X, %ld commit(s), first handler saw %ld fault(s)", (unsigned)r[3], (long)g_commits, (long)g_search);
+            check(r[3] == 0x12345678u && g_commits == 1 && g_search >= 1, "vectored handler commits a guest page and resumes", b);
+            HANDLE th[4]; DWORD code; int ok = 1;
+            for (int t = 0; t < 4; t++) th[t] = CreateThread(NULL, 0, veh_thread, base + 0xA0000000u + (uintptr_t)t * 0x1000000u, 0, NULL);
+            WaitForMultipleObjects(4, th, TRUE, 20000);
+            for (int t = 0; t < 4; t++) { if (!GetExitCodeThread(th[t], &code) || code != 64 * 63 / 2) ok = 0; CloseHandle(th[t]); }
+            snprintf(b, sizeof b, "%ld commits in total", (long)g_commits);
+            check(ok && g_commits == 1 + 4 * 64, "4 threads faulting in 256 pages at once", b);
+            g_win = NULL;
             VirtualFree(base, 0, MEM_RELEASE);
         }
     }
@@ -229,7 +254,7 @@ int main(void)
     while (n && path[n - 1] != '\\' && path[n - 1] != '/') n--;
     strcpy(path + n, "infamous-probe.log");
     g_log = fopen(path, "w");
-    out("infamous-probe 1 (inFAMOUS Reborn ARM64 port)\n");
+    out("infamous-probe 2 (inFAMOUS Reborn ARM64 port)\n");
     probe_cpu_mem();
     probe_d3d12();
     out("%s: %d check(s) failed\n", g_fail ? "RESULT FAIL" : "RESULT OK", g_fail);
