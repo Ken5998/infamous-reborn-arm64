@@ -2,7 +2,7 @@ From 236632a67617edcbe21795d8f6c907b93aa7a938 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
  <46025606+Ken5998@users.noreply.github.com>
 Date: Sun, 15 Nov 2026 14:58:10 +0000
-Subject: [PATCH 4/5] main: write stdout and stderr to the files named by
+Subject: [PATCH 4/6] main: write stdout and stderr to the files named by
  PORT_STDOUT/PORT_STDERR
 
 Proton's launcher starts the game without std handles, so everything the

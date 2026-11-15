@@ -1,0 +1,197 @@
+From 511738481ccbe05fa038e7a706660c71f26f15cf Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
+ <46025606+Ken5998@users.noreply.github.com>
+Date: Sun, 15 Nov 2026 17:09:26 +0000
+Subject: [PATCH 6/6] runtime: stop short waits from spinning or queueing under
+ Proton
+
+libc++ on Windows truncates a condition variable's remaining time to
+whole milliseconds, so the 1 ms lwcond poll (FIOS' scheduler and media
+threads) started with a 0 ms wait and spun until the deadline: ten such
+threads took 25-55% of a CPU each on an 8-core handheld. Waits of 1 ms
+or more now make one OS wait of the time rounded up to whole ms.
+
+Under Wine, waitable timers are wineserver objects, and the SPURS
+kernels park on a 250 us timer thousands of times a second. Take
+NtDelayExecution and NtWaitForSingleObject with a relative timeout
+there instead (PORT_WINE_TIMERS=1 keeps the timers); native Windows is
+unchanged.
+---
+ ps3recomp/include/ps3emu/host_wait.h   | 59 ++++++++++++++++++++++++++
+ ps3recomp/libs/spurs/cellSpurs.c       |  8 +++-
+ ps3recomp/runtime/ppu/ppu_sysprx.cpp   | 25 +++++++++--
+ ps3recomp/runtime/syscalls/sys_timer.c |  5 ++-
+ 4 files changed, 91 insertions(+), 6 deletions(-)
+ create mode 100644 ps3recomp/include/ps3emu/host_wait.h
+
+diff --git a/ps3recomp/include/ps3emu/host_wait.h b/ps3recomp/include/ps3emu/host_wait.h
+new file mode 100644
+index 0000000..c396a10
+--- /dev/null
++++ b/ps3recomp/include/ps3emu/host_wait.h
+@@ -0,0 +1,59 @@
++/* Short timed waits that stay inside the process under Wine/Proton.
++ *
++ * Waitable timers are wineserver objects: every SetWaitableTimer and every wait on one is a
++ * request to the single wineserver thread. The SPURS kernels park on a 250 us timer thousands
++ * of times a second each, so on a machine with few cores the wineserver falls behind and the
++ * parked kernels wake (and find their work) late. Under Wine the same waits go through
++ * NtDelayExecution (non-alertable: a nanosleep in the process) and NtWaitForSingleObject with a
++ * relative 100 ns timeout (fsync/esync wait on the event in the process). Native Windows keeps
++ * the high-resolution timers. PORT_WINE_TIMERS=1 restores the timer path under Wine as well. */
++#ifndef PS3EMU_HOST_WAIT_H
++#define PS3EMU_HOST_WAIT_H
++#ifdef _WIN32
++#include <windows.h>
++#include <stdio.h>
++#include <stdlib.h>
++
++typedef LONG (NTAPI* host_wait_delay_fn)(BOOLEAN, PLARGE_INTEGER);
++typedef LONG (NTAPI* host_wait_single_fn)(HANDLE, BOOLEAN, PLARGE_INTEGER);
++
++static host_wait_delay_fn  s_host_wait_delay;
++static host_wait_single_fn s_host_wait_single;
++
++/* 1 = take the in-process path (running under Wine and not overridden) */
++static inline int host_wait_nt(void)
++{
++    static volatile int v = -1;
++    if (__builtin_expect(v < 0, 0)) {
++        HMODULE nt = GetModuleHandleA("ntdll.dll");
++        const int wine = nt && GetProcAddress(nt, "wine_get_version");
++        const char* e = getenv("PORT_WINE_TIMERS");
++        int on = wine && !(e && *e == '1');
++        if (on) {
++            s_host_wait_delay  = (host_wait_delay_fn)(void*)GetProcAddress(nt, "NtDelayExecution");
++            s_host_wait_single = (host_wait_single_fn)(void*)GetProcAddress(nt, "NtWaitForSingleObject");
++            on = s_host_wait_delay && s_host_wait_single;
++        }
++        static volatile LONG s_said = 0;
++        if (wine && InterlockedExchange(&s_said, 1) == 0)
++            fprintf(stderr, "[host-wait] Wine: short timed waits %s (PORT_WINE_TIMERS=1 = waitable timers)\n",
++                    on ? "in process (NtDelayExecution / NtWaitForSingleObject)" : "on waitable timers");
++        v = on;
++    }
++    return v;
++}
++
++static inline void host_sleep_us(long long us)
++{
++    LARGE_INTEGER d; d.QuadPart = -(us * 10);
++    s_host_wait_delay(FALSE, &d);
++}
++
++/* WAIT_OBJECT_0 when h was signalled, WAIT_TIMEOUT otherwise (the NTSTATUS values match) */
++static inline DWORD host_wait_us(HANDLE h, long long us)
++{
++    LARGE_INTEGER d; d.QuadPart = -(us * 10);
++    return (DWORD)s_host_wait_single(h, FALSE, &d);
++}
++#endif
++#endif
+diff --git a/ps3recomp/libs/spurs/cellSpurs.c b/ps3recomp/libs/spurs/cellSpurs.c
+index 6cf2a04..7677555 100644
+--- a/ps3recomp/libs/spurs/cellSpurs.c
++++ b/ps3recomp/libs/spurs/cellSpurs.c
+@@ -16,6 +16,7 @@
+ #include "spu_workload.h"   /* SPU image -> lifted-entry dispatch (runtime/spu) */
+ #include "spurs_taskset.h"  /* REAL BE CellSpursTaskset layout builders (fork Option-B) */
+ #include "../../runtime/ppu/ppu_memory.h"   /* vm_base (guest mem) */
++#include "ps3emu/host_wait.h"
+ #include "ps3emu/hz_stats.h"   /* v225A hitch attribution (FIOS_HLE inflate time) */
+ #include <stdio.h>
+ #include <stdlib.h>   /* getenv -- an implicit decl returns int, truncating the pointer */
+@@ -4224,7 +4225,9 @@ static DWORD WINAPI spurs_kernel_thread(LPVOID p)
+                     InterlockedExchange(&s_kick_waiting[kick_slot], 1);
+                     InterlockedIncrement(&s_kick_parked);
+                     DWORD r;
+-                    if (t_tm2) {
++                    if (host_wait_nt()) {
++                        r = host_wait_us(s_kick_ev[kick_slot], wait_us);
++                    } else if (t_tm2) {
+                         LARGE_INTEGER due; due.QuadPart = -(wait_us * 10);
+                         SetWaitableTimer(t_tm2, &due, 0, NULL, NULL, FALSE);
+                         HANDLE hs[2] = { s_kick_ev[kick_slot], t_tm2 };
+@@ -4246,7 +4249,8 @@ static DWORD WINAPI spurs_kernel_thread(LPVOID p)
+ #ifdef _WIN32
+                     static SPU_PM_TLS HANDLE t_tm = NULL; static SPU_PM_TLS int t_tm_tried = 0;
+                     if (!t_tm_tried) { t_tm_tried = 1; t_tm = CreateWaitableTimerExW(NULL, NULL, 0x00000002, 0x1F0003); }
+-                    if (t_tm && wait_us > 0) { LARGE_INTEGER due; due.QuadPart = -(wait_us * 10); SetWaitableTimer(t_tm, &due, 0, NULL, NULL, FALSE); WaitForSingleObject(t_tm, INFINITE); }
++                    if (wait_us > 0 && host_wait_nt()) host_sleep_us(wait_us);
++                    else if (t_tm && wait_us > 0) { LARGE_INTEGER due; due.QuadPart = -(wait_us * 10); SetWaitableTimer(t_tm, &due, 0, NULL, NULL, FALSE); WaitForSingleObject(t_tm, INFINITE); }
+                     else if (wait_us > 0) Sleep(1); else SwitchToThread();
+ #else
+                     if (wait_us > 0) usleep((useconds_t)wait_us); else sched_yield();
+diff --git a/ps3recomp/runtime/ppu/ppu_sysprx.cpp b/ps3recomp/runtime/ppu/ppu_sysprx.cpp
+index faf9184..08a9c5e 100644
+--- a/ps3recomp/runtime/ppu/ppu_sysprx.cpp
++++ b/ps3recomp/runtime/ppu/ppu_sysprx.cpp
+@@ -541,6 +541,26 @@ long long lwc_poll_us()
+  * the 1 ms cap each one woke ~1000x/s and ran an empty work pass (~145k waits / 10 s in play155,
+  * [LWCOND-STAT]), every pass several HLE calls (lwmutex lock/unlock, the shared ppu_gcm_pump atomics).
+  * FIOS (lr 0x442B80) is NOT in the default list: it relies on the 1 ms poll. */
++/* Timed condition-variable wait for the lwcond paths below. libc++ on Windows hands
++ * SleepConditionVariableSRW the remaining time truncated to whole milliseconds, so a 1 ms
++ * wait_for starts with a 0 ms wait and then spins on SleepConditionVariableSRW(0) until the
++ * deadline: every FIOS thread in its 1 ms poll burned 25-55 % of a CPU (seen under Proton on an
++ * 8-core ARM64 handheld). With libc++, waits of 1 ms or more become one OS wait of the time
++ * rounded up to whole ms; the caller treats an early or late wake like a poll wake. Shorter
++ * waits and every other standard library keep std::condition_variable::wait_for. */
++template <class Pred>
++static bool lwc_cv_wait_us(std::condition_variable& cv, std::unique_lock<std::mutex>& lk, long long us, Pred pred)
++{
++#if defined(_WIN32) && defined(_LIBCPP_VERSION)
++    if (us >= 1000) {
++        if (pred()) return true;
++        const long long ms = (us + 999) / 1000;
++        cv.wait_for(lk, std::chrono::microseconds(ms * 1000 + 900));   /* truncates to exactly ms */
++        return pred();
++    }
++#endif
++    return cv.wait_for(lk, std::chrono::microseconds(us), pred);
++}
+ struct LwcSitePoll { int n = 0; uint32_t lr[8] = {0}; long long us[8] = {0}; };
+ const LwcSitePoll& lwc_site_poll_cfg()
+ {
+@@ -738,8 +758,7 @@ static void sys_lwcond_wait(ppu_context* ctx)
+             long long cap_us = use_obj ? lwc_site_poll_us((uint32_t)ctx->lr, lwc_poll_us()) : 1000;   /* v156 per-site cap */
+             const bool guest_cap = timeout_us && (long long)timeout_us < cap_us;
+             if (guest_cap) cap_us = (long long)timeout_us;
+-            bool got = CV.wait_for(lk, std::chrono::microseconds(cap_us),
+-                                   [&]{ return MAP[lwcond].pending > 0; });
++            bool got = lwc_cv_wait_us(CV, lk, cap_us, [&]{ return MAP[lwcond].pending > 0; });
+             LwcState& st = MAP[lwcond];
+             if (got) st.pending--;
+             st.waiters--;
+@@ -763,7 +782,7 @@ static void sys_lwcond_wait(ppu_context* ctx)
+             auto pred = [&]{ return MAP[lwcond].pending > 0; };
+             bool got;
+             if (!guest_tmo && max_ms <= 0) { CV.wait(lk, pred); got = true; }
+-            else got = CV.wait_for(lk, std::chrono::milliseconds(lim_ms), pred);
++            else got = lwc_cv_wait_us(CV, lk, lim_ms * 1000, pred);
+             LwcState& st = MAP[lwcond];
+             if (got) st.pending--;
+             st.waiters--;
+diff --git a/ps3recomp/runtime/syscalls/sys_timer.c b/ps3recomp/runtime/syscalls/sys_timer.c
+index 2933db6..0e98bb1 100644
+--- a/ps3recomp/runtime/syscalls/sys_timer.c
++++ b/ps3recomp/runtime/syscalls/sys_timer.c
+@@ -5,6 +5,7 @@
+ #include "sys_timer.h"
+ #include "sys_event.h"
+ #include "../memory/vm.h"
++#include "ps3emu/host_wait.h"
+ #include <stdlib.h>   /* getenv -- an implicit decl returns int, truncating the pointer */
+ #include <string.h>
+ #include <stdlib.h>
+@@ -246,7 +247,9 @@ int64_t sys_timer_usleep(ppu_context* ctx)
+ 
+ #ifdef _WIN32
+     /* Use high-resolution sleep via waitable timer for better precision */
+-    if (usec >= 1000 || capped) {
++    if ((usec >= 1000 || capped) && host_wait_nt()) {
++        host_sleep_us((long long)usec);
++    } else if (usec >= 1000 || capped) {
+         /* v59: one HIGH-RESOLUTION waitable timer per thread (Win10 1803+), created once.
+          * The old code created a plain timer per call: ~1-2 ms granularity, so the game's
+          * audio driver (brbDriver polls with usleep(1000) ~800x/s) and every other 1 ms

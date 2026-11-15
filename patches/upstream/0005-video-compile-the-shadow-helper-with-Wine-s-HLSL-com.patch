@@ -2,7 +2,7 @@ From 147a71e06d24b8584056cd2b0155dac088138b70 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
  <46025606+Ken5998@users.noreply.github.com>
 Date: Sun, 15 Nov 2026 15:20:32 +0000
-Subject: [PATCH 5/5] video: compile the shadow helper with Wine's HLSL
+Subject: [PATCH 5/6] video: compile the shadow helper with Wine's HLSL
  compiler
 
 vkd3d-shader has no isnan(), so every fragment program that pulls in
