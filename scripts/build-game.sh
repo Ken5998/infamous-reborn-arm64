@@ -20,8 +20,9 @@ build="$src/infamous-recomp/build-arm64"
 export IF_TOOLCHAIN="$tc"
 
 flags="-fms-extensions $IF_ARCH_FLAGS"
-# x86 SIMD code paths compile through sse2neon (compat/x86); the runtime picks its SSE4.1 paths
-flags+=" -D__SSE__ -D__SSE2__ -D__SSE3__ -D__SSSE3__ -D__SSE4_1__ -D__SSE4_2__"
+# x86 SIMD code paths compile through sse2neon plus the FMA3 forms (compat/x86); the runtime picks
+# its SSE4.1 paths and the lifted SPU code its fused float multiply-adds
+flags+=" -D__SSE__ -D__SSE2__ -D__SSE3__ -D__SSSE3__ -D__SSE4_1__ -D__SSE4_2__ -D__FMA__"
 flags+=" -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 -I$tc/x86compat"
 link="-static -L$tc/libcase"
 
@@ -40,6 +41,7 @@ cmake -S "$src/infamous-recomp" -B "$build" -G Ninja \
     -DPS3RECOMP_DIR="$src/ps3recomp" \
     -DPython3_EXECUTABLE="$(command -v python3)"
 
+# -k 0: build every file that can be built, so one run (and one log) shows every failing file
 # shellcheck disable=SC2086
-ninja -C "$build" -j "$(build_jobs)" ${IF_TARGETS:-}
+ninja -C "$build" -j "$(build_jobs)" -k 0 ${IF_TARGETS:-}
 [ -n "${IF_TARGETS:-}" ] || check_arm64_pe "$build/inFamousRecomp.exe"
