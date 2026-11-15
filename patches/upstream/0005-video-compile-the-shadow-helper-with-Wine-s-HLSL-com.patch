@@ -1,0 +1,74 @@
+From 147a71e06d24b8584056cd2b0155dac088138b70 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
+ <46025606+Ken5998@users.noreply.github.com>
+Date: Sun, 15 Nov 2026 15:20:32 +0000
+Subject: [PATCH 5/5] video: compile the shadow helper with Wine's HLSL
+ compiler
+
+vkd3d-shader has no isnan(), so every fragment program that pulls in
+the shadow helper failed to compile under Proton, and since only good
+compiles were cached, each pipeline miss compiled it again on every
+draw. Test NaN by its bits, remember sources that failed, and log
+fresh compile errors past the first 16.
+---
+ ps3recomp/libs/video/rsx_d3d12_backend.c | 31 +++++++++++++++++++++---
+ 1 file changed, 27 insertions(+), 4 deletions(-)
+
+diff --git a/ps3recomp/libs/video/rsx_d3d12_backend.c b/ps3recomp/libs/video/rsx_d3d12_backend.c
+index 5a11167..dc9c608 100644
+--- a/ps3recomp/libs/video/rsx_d3d12_backend.c
++++ b/ps3recomp/libs/video/rsx_d3d12_backend.c
+@@ -3173,8 +3173,24 @@ static HRESULT cached_compile_impl(const char* src, size_t len, const char* name
+             fclose(f);
+         }
+     }
++    /* A source that failed once fails again: remember it, so a pipeline miss on the same
++     * program does not pay a full D3DCompile on every draw (3-5 ms each under Proton). */
++    static volatile LONG64 s_bad[4096];
++    const LONG64 bad_key = (LONG64)(h | 1);
++    for (unsigned i = 0; i < 8; i++) {
++        const LONG64 v = s_bad[((unsigned)(h >> 8) + i) & 4095];
++        if (v == bad_key) { *out = NULL; if (err) *err = NULL; return E_FAIL; }
++        if (v == 0) break;
++    }
+     HRESULT hr = D3DCompile(src, len, name, defs, inc, entry, target, f1, f2, out, err);
+     misses++; hz_add(HZ_SHC_MISS, 1);   /* v225A */
++    if (FAILED(hr) || !*out) {
++        for (unsigned i = 0; i < 8; i++) {
++            volatile LONG64* slot = &s_bad[((unsigned)(h >> 8) + i) & 4095];
++            const LONG64 v = InterlockedCompareExchange64(slot, bad_key, 0);
++            if (v == 0 || v == bad_key) break;
++        }
++    }
+     if (on && !s_bis_nodisk && SUCCEEDED(hr) && *out) {
+         char tmp[140]; snprintf(tmp, sizeof tmp, "%s.tmp", path);
+         FILE* f = fopen(tmp, "wb");
+@@ -4238,7 +4254,9 @@ static const char s_shadow_fn[] =
+     "    float4 du = float4(-o.x, 1.0 / ts.x - o.x, 1.0 / ts.x - o.x, -o.x);\n"
+     "    float4 dv = float4(1.0 / ts.y - o.y, 1.0 / ts.y - o.y, -o.y, -o.y);\n"
+     "    float4 rp = g.x * du + g.y * dv;\n"
+-    "    if (any(abs(rp) > RSX_SHRPMAX) || any(isnan(rp))) rp = (float4)0;\n"
++    /* NaN test by bits: Wine's HLSL compiler (vkd3d-shader) has no isnan(), and every
++     * shadowed fragment program failed to compile under Proton without this. */
++    "    if (any(abs(rp) > RSX_SHRPMAX) || any((asuint(rp) & 0x7fffffff) > 0x7f800000)) rp = (float4)0;\n"
+     "    float4 z = p.zzzz + rp - RSX_SHBIAS;\n"
+     "#else\n"
+     "    float zs = max(abs(ddx(p.z)), abs(ddy(p.z)));\n"
+@@ -4938,9 +4956,14 @@ static ID3D12PipelineState* vp_get_fp_pso_impl(int vs_idx, u32 fp_addr, u32 blen
+     HRESULT hr = cached_compile(hlsl, strlen(hlsl), "guest_fp", NULL, NULL,
+                             "main", "ps_5_0", 0, 0, &pb, &e);
+     if (FAILED(hr) || !pb) {
+-        static int _e2=0; if ((_e2 < 16 && _e2++ < 16))
+-            printf("[FP] PS compile FAIL (fp=0x%08X): %s\n", fp_addr,
+-                   e ? (const char*)e->lpVtbl->GetBufferPointer(e) : "?");
++        /* fresh failures carry the compiler's message; repeats of a known bad source come back
++         * from the compile cache without one and are only counted */
++        static volatile LONG _e2 = 0, _k2 = 0;
++        if (e) { const LONG n = InterlockedIncrement(&_e2);
++                 if (n <= 64) printf("[FP] PS compile FAIL #%ld (fp=0x%08X): %s\n", (long)n, fp_addr,
++                                     (const char*)e->lpVtbl->GetBufferPointer(e)); }
++        else   { const LONG n = InterlockedIncrement(&_k2);
++                 if ((n & 4095) == 1) printf("[FP] %ld draws hit a program that failed to compile (fp=0x%08X)\n", (long)n, fp_addr); }
+         if (e) e->lpVtbl->Release(e);
+         return NULL;
+     }

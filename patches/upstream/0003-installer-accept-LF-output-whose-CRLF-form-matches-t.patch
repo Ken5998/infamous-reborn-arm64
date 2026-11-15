@@ -2,7 +2,7 @@ From f9163ded4994586c849c4fa0972d65df9ced72d8 Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
  <46025606+Ken5998@users.noreply.github.com>
 Date: Sun, 15 Nov 2026 14:17:36 +0000
-Subject: [PATCH 3/4] installer: accept LF output whose CRLF form matches the
+Subject: [PATCH 3/5] installer: accept LF output whose CRLF form matches the
  lock
 
 generated.lock is made on Windows, where Python's text mode writes
