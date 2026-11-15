@@ -33,6 +33,20 @@ source_arg="$1"
 dir="${2:-$HOME/.local/share/inFAMOUSReborn-arm64}"
 mkdir -p "$dir"
 dir="$(cd "$dir" && pwd)"
+
+# The build takes hours: keep the handheld awake while it runs and keep a log (build.log) to share.
+if [ -z "${IF_BUILD_CHILD:-}" ]; then
+    export IF_BUILD_CHILD=1
+    echo "Log: $dir/build.log"
+    if command -v systemd-inhibit >/dev/null &&
+        systemd-inhibit --what=sleep:idle --who=inFAMOUS --why=check true 2>/dev/null; then
+        systemd-inhibit --what=sleep:idle --who="inFAMOUS Reborn build" --why="Building the game" \
+            "$0" "$@" 2>&1 | tee "$dir/build.log"
+    else
+        "$0" "$@" 2>&1 | tee "$dir/build.log"
+    fi
+    exit "${PIPESTATUS[0]}"
+fi
 tc="$dir/toolchain"
 src="$dir/inFAMOUSreborn"
 tools="$dir/tools"
