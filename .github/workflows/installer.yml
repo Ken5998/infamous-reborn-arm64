@@ -2,7 +2,8 @@ name: Installer build
 
 # inFAMOUS Reborn's own installer (MIT, installer/ in its repository) is what reads the disc and
 # regenerates the game code. ArmadaOS has no Rust, so scripts/build.sh downloads this build of it,
-# made from the commit pinned in upstream.json, from the release installer-<commit>.
+# made from the commit pinned in upstream.json with patches/upstream, from the release
+# installer-<commit>-<patches> (scripts/common.sh installer_tag).
 on:
   push:
     branches: [main]
@@ -30,8 +31,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           c=$(python3 -c 'import json; print(json.load(open("upstream.json"))["infamous"]["commit"][:12])')
-          tag="installer-$c"
-          notes="inFAMOUS Reborn's command-line installer (MIT, by whompay) built for linux-arm64 from https://github.com/whompay/inFAMOUSreborn/tree/$c/installer. scripts/build.sh downloads it; you do not need it by hand."
+          tag=$(repo=$PWD bash -c '. scripts/common.sh && installer_tag')
+          notes="inFAMOUS Reborn's command-line installer (MIT, by whompay) built for linux-arm64 from https://github.com/whompay/inFAMOUSreborn/tree/$c/installer with this repository's patches/upstream. scripts/build.sh downloads it; you do not need it by hand."
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" infamous-installer-linux-arm64 --clobber
           else

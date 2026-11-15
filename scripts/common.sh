@@ -12,6 +12,9 @@ v = json.load(open(sys.argv[1]))
 for k in sys.argv[2:]: v = v[k]
 print(v)' "$repo/upstream.json" "$@"
 }
+installer_tag() {  # the release with inFAMOUS Reborn's installer built from the pinned commit + patches/upstream
+    echo "installer-$(field infamous commit | cut -c1-12)-$(key "$repo"/patches/upstream/*.patch | cut -c1-8)"
+}
 fetch() {  # fetch URL SHA256 FILE: download once, verified
     local url=$1 sum=$2 out=$3
     if [ -f "$out" ] && [ "$(sha256sum "$out" | cut -d' ' -f1)" = "$sum" ]; then return 0; fi

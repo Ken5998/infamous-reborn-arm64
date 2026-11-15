@@ -74,8 +74,8 @@ fi
 
 # inFAMOUS Reborn's own installer (MIT) reads the disc and regenerates the code: built from the
 # pinned checkout with cargo when there is one, else the build this repository's CI made of it.
-commit="$(field infamous commit)"
-inst="$tools/infamous-installer-${commit:0:12}"
+tag="$(installer_tag)"
+inst="$tools/infamous-$tag"
 if [ ! -x "$inst" ]; then
     step "inFAMOUS Reborn's installer"
     if command -v cargo >/dev/null; then
@@ -83,7 +83,7 @@ if [ ! -x "$inst" ]; then
         cp "$src/installer/target/release/infamous-installer" "$inst.part"
     else
         curl -fL --retry 3 -o "$inst.part" \
-            "https://github.com/Ken5998/infamous-reborn-arm64/releases/download/installer-${commit:0:12}/infamous-installer-linux-arm64"
+            "https://github.com/Ken5998/infamous-reborn-arm64/releases/download/$tag/infamous-installer-linux-arm64"
     fi
     chmod +x "$inst.part" && mv "$inst.part" "$inst"
 fi

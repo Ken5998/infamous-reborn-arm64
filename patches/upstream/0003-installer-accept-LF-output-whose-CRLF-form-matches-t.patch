@@ -1,0 +1,105 @@
+From f9163ded4994586c849c4fa0972d65df9ced72d8 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
+ <46025606+Ken5998@users.noreply.github.com>
+Date: Sun, 15 Nov 2026 14:17:36 +0000
+Subject: [PATCH 3/3] installer: accept LF output whose CRLF form matches the
+ lock
+
+generated.lock is made on Windows, where Python's text mode writes
+CRLF. On Linux the same steps write LF, so the PPU lifter output, the
+v200 passes and pm_wwsjob.functions.json never matched and the patch
+set was refused. Give such a file CRLF line ends when that is exactly
+what the lock expects.
+---
+ installer/src/pipeline.rs | 51 ++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 50 insertions(+), 1 deletion(-)
+
+diff --git a/installer/src/pipeline.rs b/installer/src/pipeline.rs
+index 7c55510..2b7f640 100644
+--- a/installer/src/pipeline.rs
++++ b/installer/src/pipeline.rs
+@@ -292,6 +292,26 @@ pub fn lock_satisfied(root: &Path, lock: &Lock) -> Result<bool> {
+     Ok(true)
+ }
+ 
++/// `data` with every LF that has no CR before it turned into CRLF, or None when there is none.
++fn lf_to_crlf(data: &[u8]) -> Option<Vec<u8>> {
++    let lone = data
++        .iter()
++        .enumerate()
++        .filter(|&(i, &b)| b == b'\n' && (i == 0 || data[i - 1] != b'\r'))
++        .count();
++    if lone == 0 {
++        return None;
++    }
++    let mut out = Vec::with_capacity(data.len() + lone);
++    for (i, &b) in data.iter().enumerate() {
++        if b == b'\n' && (i == 0 || data[i - 1] != b'\r') {
++            out.push(b'\r');
++        }
++        out.push(b);
++    }
++    Some(out)
++}
++
+ pub fn patch_path(installer_dir: &Path, rel: &str) -> PathBuf {
+     util::join_slash(&installer_dir.join("patches"), &format!("{rel}.patch"))
+ }
+@@ -311,9 +331,10 @@ pub fn apply_lock(
+     let known: BTreeSet<&str> = lock.files.iter().map(|e| e.path.as_str()).collect();
+     let mut problems: Vec<String> = Vec::new();
+     let (mut patched, mut created, mut removed, mut same) = (0, 0, 0, 0);
++    let mut eol = 0;
+     for e in &lock.files {
+         let p = util::join_slash(root, &e.path);
+-        let cur = if p.is_file() {
++        let mut cur = if p.is_file() {
+             Some(hash::sha256_file(&p)?)
+         } else {
+             None
+@@ -326,6 +347,18 @@ pub fn apply_lock(
+                 }
+             }
+             (base, Some(fin)) => {
++                // The lock is made on Windows, where Python's text mode writes CRLF; the same
++                // steps write LF elsewhere. Take a file whose CRLF form is what the lock expects.
++                if cur.is_some() && cur != *base && cur.as_deref() != Some(fin.as_str()) {
++                    if let Some(crlf) = lf_to_crlf(&fs::read(&p)?) {
++                        let h = hash::sha256_hex(&crlf);
++                        if base.as_deref() == Some(h.as_str()) || h == *fin {
++                            util::write_file(&p, &crlf)?;
++                            cur = Some(h);
++                            eol += 1;
++                        }
++                    }
++                }
+                 if cur.as_deref() == Some(fin.as_str()) {
+                     same += 1;
+                     continue; // already final (identical output, or patched earlier)
+@@ -384,6 +417,9 @@ pub fn apply_lock(
+             if problems.len() > 25 { "\n      ..." } else { "" }
+         );
+     }
++    if eol > 0 {
++        util::info(&format!("{eol} file(s) given CRLF line ends to match the lock"));
++    }
+     util::info(&format!(
+         "{same} file(s) already right, {patched} patched, {created} created, {removed} removed{}",
+         if extra.is_empty() {
+@@ -600,3 +636,16 @@ pub fn export_tree(m: &Manifest, root: &Path, out: &Path) -> Result<(usize, u64)
+     }
+     Ok((files.len(), bytes))
+ }
++
++#[cfg(test)]
++mod eol_tests {
++    use super::lf_to_crlf;
++
++    #[test]
++    fn lf_to_crlf_converts_lone_lf_only() {
++        assert_eq!(lf_to_crlf(b"a\nb\r\nc\n").unwrap(), b"a\r\nb\r\nc\r\n");
++        assert_eq!(lf_to_crlf(b"\nx").unwrap(), b"\r\nx");
++        assert!(lf_to_crlf(b"a\r\nb\r\n").is_none());
++        assert!(lf_to_crlf(b"no newline").is_none());
++    }
++}
