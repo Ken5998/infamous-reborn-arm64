@@ -135,6 +135,8 @@ fetch "$(field sdl3 url)" "$(field sdl3 sha256)" "$sdl"
 python3 -c 'import sys, zipfile; open(sys.argv[3], "wb").write(zipfile.ZipFile(sys.argv[1]).read(sys.argv[2]))' \
     "$sdl" "$(field sdl3 dll)" "$build/SDL3.dll"
 python3 -I "$repo/scripts/write-launch.py" "$src" "$dir" "$game"
+step "Setting up Proton for inFAMOUS"
+"$dir/infamous.sh" --init-prefix || echo "Warning: Proton could not set up its prefix yet; the first start tries again."
 
 steam=no
 if [ "${IF_ADD_TO_STEAM:-1}" = 1 ]; then
