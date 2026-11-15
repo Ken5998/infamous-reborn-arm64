@@ -1,0 +1,30 @@
+From 236632a67617edcbe21795d8f6c907b93aa7a938 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
+ <46025606+Ken5998@users.noreply.github.com>
+Date: Sun, 15 Nov 2026 14:58:10 +0000
+Subject: [PATCH 4/4] main: write stdout and stderr to the files named by
+ PORT_STDOUT/PORT_STDERR
+
+Proton's launcher starts the game without std handles, so everything the
+runtime prints (telemetry, warnings, errors) was lost on the ARM64 port.
+The port's launch script names the log files instead.
+---
+ infamous-recomp/main.cpp | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/infamous-recomp/main.cpp b/infamous-recomp/main.cpp
+index 3e54600..c16c2b9 100644
+--- a/infamous-recomp/main.cpp
++++ b/infamous-recomp/main.cpp
+@@ -893,6 +893,11 @@ int main(int argc, char** argv)
+ #ifdef _WIN32
+     /* v241C LOG_ASYNC drain helper process (see v241c_la): nothing else runs in it */
+     if (argc >= 2 && strcmp(argv[1], "--v241c-logdrain") == 0) return v241c_la::helper_main(argc, argv);
++    /* PORT_STDOUT / PORT_STDERR (default unset = nothing): files for stdout / stderr. The Windows launchers start the
++     * game with both redirected to play.out.log / play.err.log; Proton's launcher starts it with no std handles, so
++     * the ARM64 port names the files here. Before the first stdio access (configure_stdout_buffering). */
++    { const char* o = getenv("PORT_STDOUT"); if (o && *o && !freopen(o, "w", stdout)) return 70;
++      const char* e = getenv("PORT_STDERR"); if (e && *e && !freopen(e, "w", stderr)) return 71; }
+     /* v242B PS3_AFFINITY=<hex mask> (default unset = nothing): restrict the whole process to those logical CPUs
+      * BEFORE any thread exists (weak-PC emulation / user choice). bench_drive's BENCH_AFFINITY only applies the mask
+      * after the start, so threads sized at boot saw all CPUs. Bits outside the system mask are ignored. */

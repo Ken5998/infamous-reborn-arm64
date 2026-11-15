@@ -2,7 +2,7 @@ From e7ed13e406d9093392941c284625091eaf93014e Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Kenan=20Kasumovi=C4=87?=
  <46025606+Ken5998@users.noreply.github.com>
 Date: Sat, 14 Nov 2026 20:17:54 +0000
-Subject: [PATCH 2/3] build: write the link map with the GNU driver on MinGW
+Subject: [PATCH 2/4] build: write the link map with the GNU driver on MinGW
 
 /MAP: is an MSVC linker option; the MinGW clang driver takes it for an
 input file.
